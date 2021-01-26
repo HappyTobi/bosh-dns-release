@@ -22,6 +22,8 @@ type Config struct {
 	Address            string       `json:"address"`
 	Port               int          `json:"port"`
 	BindTimeout        DurationJSON `json:"timeout,omitempty"`
+	RecursorRetryCount int          `json:"recursor_retry_count,omitempty"`
+	RecursorRetryDelay DurationJSON `json:"recursor_retry_delay,omitempty"`
 	RequestTimeout     DurationJSON `json:"request_timeout,omitempty"`
 	RecursorTimeout    DurationJSON `json:"recursor_timeout,omitempty"`
 	Recursors          []string     `json:"recursors,omitempty"`
@@ -174,7 +176,28 @@ func LoadFromFile(configFilePath string) (Config, error) {
 		return Config{}, errors.New("invalid value for recursor_selection; expected 'serial' or 'smart'")
 	}
 
+	c.RecursorRetryCount, c.RecursorRetryDelay, err = AppendDefaultRecursorRetrySettingsIfMissing(c.RecursorRetryCount, c.RecursorRetryDelay, c.RecursorSelection)
+	if err != nil {
+		return Config{}, err
+	}
+
 	return c, nil
+}
+
+func AppendDefaultRecursorRetrySettingsIfMissing(retryCount int, retryDelay DurationJSON, selection string) (int, DurationJSON, error) {
+	if selection != "smart" {
+		return 0, retryDelay, errors.New("recursor_retry_count and recursor_retry_delay only work for the 'smart' recursor_selection")
+	}
+
+	if retryCount == 0 && retryDelay == 0 {
+		return 0, DurationJSON(0 * time.Second), nil
+	}
+
+	if retryCount == 0 && retryDelay > 0 {
+		return 0, retryDelay, errors.New("no value for recursor_retry_count found; expected number or for recursor_retry_count")
+	}
+
+	return retryCount, retryDelay, nil
 }
 
 func AppendDefaultDNSPortIfMissing(recursors []string) ([]string, error) {

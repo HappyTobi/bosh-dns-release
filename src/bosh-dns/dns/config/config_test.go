@@ -34,6 +34,8 @@ var _ = Describe("Config", func() {
 		listenAddress           string
 		listenPort              int
 		logLevel                string
+		//recursorRetryCount		int
+		//recursorRetryDelay		string
 		recursorTimeout         string
 		requestTimeout          string
 		timeout                 string
@@ -143,6 +145,9 @@ var _ = Describe("Config", func() {
 		recursorTimeoutDuration, err := time.ParseDuration(recursorTimeout)
 		Expect(err).ToNot(HaveOccurred())
 
+		/*recursorRetryDelayDuration, err := time.ParseDuration(recursorRetryDelay)
+		Expect(err).ToNot(HaveOccurred())*/
+
 		upcheckIntervalDuration, err := time.ParseDuration(upcheckInterval)
 		Expect(err).ToNot(HaveOccurred())
 
@@ -161,7 +166,9 @@ var _ = Describe("Config", func() {
 				PrivateKeyFile:  apiPrivateKeyFile,
 				CAFile:          apiCAFile,
 			},
-			BindTimeout:        config.DurationJSON(timeoutDuration),
+			BindTimeout: config.DurationJSON(timeoutDuration),
+			//RecursorRetryCount: recursorRetryCount,
+			//RecursorRetryDelay: config.DurationJSON(recursorRetryDelayDuration),
 			RequestTimeout:     config.DurationJSON(requestTimeoutDuration),
 			RecursorTimeout:    config.DurationJSON(recursorTimeoutDuration),
 			Recursors:          []string{},
@@ -276,6 +283,40 @@ var _ = Describe("Config", func() {
 
 			_, err := config.LoadFromFile(configFilePath)
 			Expect(err).To(MatchError("invalid value for recursor_selection; expected 'serial' or 'smart'"))
+		})
+
+		It("recursor_retry_count default", func() {
+			configFilePath := writeConfigFile(`{"address": "127.0.0.1", "port": 53, "recursor_selection": "smart" }`)
+
+			c, err := config.LoadFromFile(configFilePath)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(c.RecursorRetryCount).To(Equal(0))
+			Expect(c.RecursorRetryDelay).To(Equal(config.DurationJSON(0)))
+		})
+
+		It("recursor_retry_count with value", func() {
+			configFilePath := writeConfigFile(`{"address": "127.0.0.1", "port": 53, "recursor_selection": "smart", "recursor_retry_count": 3 }`)
+
+			c, err := config.LoadFromFile(configFilePath)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(c.RecursorRetryCount).To(Equal(3))
+			Expect(c.RecursorRetryDelay).To(Equal(config.DurationJSON(0)))
+		})
+
+		It("recursor_retry_count and recursor_retry_delay with value", func() {
+			configFilePath := writeConfigFile(`{"address": "127.0.0.1", "port": 53, "recursor_selection": "smart", "recursor_retry_count": 3, "recursor_retry_delay": "50ms" }`)
+
+			c, err := config.LoadFromFile(configFilePath)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(c.RecursorRetryCount).To(Equal(3))
+			Expect(c.RecursorRetryDelay).To(Equal(config.DurationJSON(50 * time.Millisecond)))
+		})
+
+		It("recursor_retry_count without value and recursor_retry_delay with value", func() {
+			configFilePath := writeConfigFile(`{"address": "127.0.0.1", "port": 53, "recursor_selection": "smart", "recursor_retry_delay": "50ms" }`)
+
+			_, err := config.LoadFromFile(configFilePath)
+			Expect(err).To(MatchError("no value for recursor_retry_count found; expected number or for recursor_retry_count"))
 		})
 	})
 
