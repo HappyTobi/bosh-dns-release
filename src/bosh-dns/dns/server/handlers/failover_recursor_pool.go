@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"sync/atomic"
+	"time"
 
 	"bosh-dns/dns/config"
 
@@ -35,12 +36,18 @@ type RecursorPool interface {
 //
 // Each recursor will be queried until one succeeds or all recursors were tried
 
-func NewFailoverRecursorPool(recursors []string, recursorSelection string, logger logger.Logger) RecursorPool {
+func NewFailoverRecursorPool(recursors []string, recursorSelection string, recursorRetryCount int, recursorRetryDelay time.Duration, logger logger.Logger) RecursorPool {
+	recursorSettings := recursorRetrySettings{
+		retryCount: recursorRetryCount,
+		retryDelay: recursorRetryDelay,
+	}
 	if recursorSelection == config.SmartRecursorSelection {
-		return newSmartFailoverRecursorPool(recursors, logger)
+		return newSmartFailoverRecursorPool(recursors, recursorSettings, logger)
 	}
 
-	return &serialFailoverRecursorPool{recursors: recursors}
+	return &serialFailoverRecursorPool{
+		recursors,
+	}
 }
 
 type serialFailoverRecursorPool struct {
@@ -50,9 +57,15 @@ type serialFailoverRecursorPool struct {
 type smartFailoverRecursorPool struct {
 	preferredRecursorIndex uint64
 
-	logger    logger.Logger
-	logTag    string
-	recursors []recursorWithHistory
+	logger                logger.Logger
+	logTag                string
+	recursors             []recursorWithHistory
+	recursorRetrySettings recursorRetrySettings
+}
+
+type recursorRetrySettings struct {
+	retryCount int
+	retryDelay time.Duration
 }
 
 type recursorWithHistory struct {
@@ -61,7 +74,7 @@ type recursorWithHistory struct {
 	failCount  int32
 }
 
-func newSmartFailoverRecursorPool(recursors []string, logger logger.Logger) RecursorPool {
+func newSmartFailoverRecursorPool(recursors []string, rescursorSettings recursorRetrySettings, logger logger.Logger) RecursorPool {
 	recursorsWithHistory := []recursorWithHistory{}
 
 	if recursors == nil {
@@ -89,6 +102,7 @@ func newSmartFailoverRecursorPool(recursors []string, logger logger.Logger) Recu
 		preferredRecursorIndex: 0,
 		logger:                 logger,
 		logTag:                 logTag,
+		recursorRetrySettings:  rescursorSettings,
 	}
 }
 
@@ -102,13 +116,31 @@ func (q *serialFailoverRecursorPool) PerformStrategically(work func(string) erro
 	return ErrNoRecursorResponse
 }
 
+func (q *smartFailoverRecursorPool) performRetryLogic(work func(string) error, recursor string) (err error) {
+	if q.recursorRetrySettings.retryCount == 0 {
+		return work(recursor)
+	}
+
+	for ret := 0; ret < q.recursorRetrySettings.retryCount; ret++ {
+		err = work(recursor)
+		if err == nil {
+			return err
+		}
+		fmt.Printf(fmt.Sprintf("dns request error for dns server %s - retry “[%d/%d] with delay of %s\n", recursor, ret+1, q.recursorRetrySettings.retryCount, q.recursorRetrySettings.retryDelay))
+		q.logger.Error(q.logTag, fmt.Sprintf("dns request error - retry “[%b/%b] with delay of %s - %s\n", ret, q.recursorRetrySettings.retryCount, q.recursorRetrySettings.retryDelay, recursor))
+		time.Sleep(q.recursorRetrySettings.retryDelay)
+	}
+	return err
+}
+
 func (q *smartFailoverRecursorPool) PerformStrategically(work func(string) error) error {
 	offset := atomic.LoadUint64(&q.preferredRecursorIndex)
 	uintRecursorCount := uint64(len(q.recursors))
 
 	for i := uint64(0); i < uintRecursorCount; i++ {
 		index := int((i + offset) % uintRecursorCount)
-		err := work(q.recursors[index].name)
+
+		err := q.performRetryLogic(work, q.recursors[index].name)
 		if err == nil {
 			q.registerResult(index, false)
 			return nil
